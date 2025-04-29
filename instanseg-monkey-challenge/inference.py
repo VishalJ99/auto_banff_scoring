@@ -202,7 +202,7 @@ def run(bboxes=None):
             mask = _rescale_to_pixel_size(_to_tensor_float32(mask_full_res), 0.24199951445730394, destination_pixel_size).to(device)
 
             tensor = _rescale_to_pixel_size(_to_tensor_float32(image), 0.24199951445730394, destination_pixel_size).to(device)
-            labels = labels.to(device) * torch.tensor(mask).bool()
+            labels = labels.to(device)
 
             if normalise_HE_bool:
                 tensor = normalise_HE(tensor)
