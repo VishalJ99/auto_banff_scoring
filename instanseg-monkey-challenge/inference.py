@@ -37,12 +37,10 @@ rescale_output = False if destination_pixel_size == 0.5 else True
 if for_submission:
     INPUT_PATH = Path("/input") #remove test fro docker
     OUTPUT_PATH = Path("/output")
-    MODEL_PATH = Path("models")
 
 else:
     INPUT_PATH = Path("/data2/vj724/automatic_banff_scores/test_single/input")
     OUTPUT_PATH = Path("/data2/vj724/automatic_banff_scores/test_single/output")
-    MODEL_PATH = Path("/data2/vj724/automatic_banff_scores/instanseg-monkey-challenge/models")
 
 def normalise_HE(x):
     import torch
@@ -108,19 +106,19 @@ class ModelEnsemble(torch.nn.Module):
         return ensemble_prediction
 
 
-def run(bboxes=None):
+def run(bboxes=None, input_path=None, output_path=None, model_dir=None):
     # Read the input
     print("starting up")
     device = "cpu"
     classification_device = "cuda"
     
     # Loads the instanseg model
-    instanseg_script = torch.jit.load(os.path.join(MODEL_PATH,instanseg_name)).to("cuda")
+    instanseg_script = torch.jit.load(os.path.join(model_dir,instanseg_name)).to("cuda")
     brightfield_nuclei = InstanSeg(instanseg_script, verbosity = 0)
 
     # Loads the classifier models
     classifier = ModelEnsemble(
-        model_paths=[os.path.join(MODEL_PATH, name) for name in model_names],
+        model_paths=[os.path.join(model_dir, name) for name in model_names],
         device=classification_device,
         use_tta=use_tta
     )
@@ -129,18 +127,15 @@ def run(bboxes=None):
     image_paths = sorted(glob(os.path.join(INPUT_PATH, "images/kidney-transplant-biopsy-wsi-pas/*.svs")) + 
                          glob(os.path.join(INPUT_PATH, "images/kidney-transplant-biopsy-wsi-pas/*.tif")))
 
-    mask_paths = sorted(glob(os.path.join(INPUT_PATH, "images/tissue-mask/*.tif")))
 
-    print("Found", len(image_paths), "images and", len(mask_paths), "masks")
     records = []
 
-    for image_path,mask_path in tqdm(zip(image_paths,mask_paths), total=len(image_paths), desc="Processing images"):
+    image_paths = [input_path]
+    for image_path in tqdm(image_paths, total=len(image_paths), desc="Processing images"):
       #  print(image_path,mask_path)
-
         if not for_submission:
             # If not for submission, create a new output path for each image
-            output_path = OUTPUT_PATH / str(Path(image_path).name.replace("_PAS_CPG.tif", "") + "/output")
-            output_path.mkdir(parents=True, exist_ok=True)
+            os.makedirs(output_path, exist_ok=True)
             print("Created output path", output_path)
             # Get the image name
             name = str(Path(image_path).name.replace("_PAS_CPG.tif", ""))
@@ -155,51 +150,30 @@ def run(bboxes=None):
                     "detected-inflammatory-cells": "detected-inflammatory-cells.json"
                 }))
    
-        else:
-            output_path = OUTPUT_PATH
 
         # image_path = image_paths[0]
         # mask_path = mask_paths[0]
         # output_path = OUTPUT_PATH
         
         img_pascpg_path = image_path
-        mask_path = mask_path
 
         from tiffslide import TiffSlide
         # Reads the image and mask
         slidepascpg = TiffSlide(img_pascpg_path)
-        slidemask = TiffSlide(mask_path)
-        print(f"Available levels in slidepascpg: {len(slidepascpg.level_downsamples)}")
-        print(f"Level downsamples: {slidepascpg.level_downsamples}")
-        print(f"Available levels in slidemask: {len(slidemask.level_downsamples)}")
-        print(f"Level downsamples: {slidemask.level_downsamples}")
-        # Reads the thumbnail of the image and mask
-        mask_thumbnail = slidemask.read_region((0, 0), 5, size = (10000,10000), as_array=True, padding=False)
-        factor = slidemask.level_downsamples[5]
-
-        # Labels the mask
-        mask_labels = sklabel(mask_thumbnail[:,:,0] > 0)
 
         all_coords = []
         all_classes = []
         all_confidences = []
 
         # Loop over the ROIs
-        for i in range(1,mask_labels.max() + 1):
+        for i in range(1,len(bboxes)//4 + 1):
             bbox = bboxes[(i-1)*4:i*4]
             bbox_native = [np.array([bbox[0],bbox[1]]),np.array([bbox[2],bbox[3]])]
-            mask = mask_labels == i
-            # bbox = np.argwhere(mask > 0)
-            # bbox = bbox.min(0) ,bbox.max(0) 
-            # mask_thumbnail_ = mask[bbox[0][0]:bbox[1][0],bbox[0][1]:bbox[1][1]]
-            # bbox = bbox[0] * factor, bbox[1] * factor
             
             bbox = bbox_native
-            mask_full_res = slidemask.read_region((bbox[0][1], bbox[0][0]), 0, (bbox[1][1] - bbox[0][1], bbox[1][0] - bbox[0][0]), as_array=True)
             image = slidepascpg.read_region((bbox[0][1], bbox[0][0]), 0, (bbox[1][1] - bbox[0][1], bbox[1][0] - bbox[0][0]), as_array=True)
 
             labels , input_tensor = brightfield_nuclei.eval_medium_image(image,pixel_size = 0.24199951445730394, rescale_output = rescale_output, seed_threshold = 0.1, tile_size= 1024)
-            mask = _rescale_to_pixel_size(_to_tensor_float32(mask_full_res), 0.24199951445730394, destination_pixel_size).to(device)
 
             tensor = _rescale_to_pixel_size(_to_tensor_float32(image), 0.24199951445730394, destination_pixel_size).to(device)
             labels = labels.to(device)
@@ -444,6 +418,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run inference with specified bounding boxes')
     parser.add_argument('--bboxes', type=float, nargs='+', 
                         help='List of bounding box coordinates in format: y1 x1 y2 x2 [y1 x1 y2 x2 ...] for multiple boxes')
+    parser.add_argument('--wsi_path', type=str, help='Path to the input directory')
+    parser.add_argument('--output_dir', type=str, help='Path to the output directory')
+    parser.add_argument('--model_dir', type=str, help='Path to the model directory')
     
     args = parser.parse_args()
     
@@ -452,4 +429,4 @@ if __name__ == "__main__":
         if len(args.bboxes) % 4 != 0:
             raise ValueError(f"Number of bbox coordinates ({len(args.bboxes)}) must be divisible by 4")
     
-    raise SystemExit(run(args.bboxes))
+    raise SystemExit(run(args.bboxes, args.wsi_path, args.output_dir, args.model_dir))
