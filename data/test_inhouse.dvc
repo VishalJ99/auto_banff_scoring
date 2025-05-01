@@ -1,0 +1,6 @@
+outs:
+- md5: 060bbef63e3864c384aaf6b3528ed850.dir
+  size: 441409518
+  nfiles: 8
+  hash: md5
+  path: test_inhouse
