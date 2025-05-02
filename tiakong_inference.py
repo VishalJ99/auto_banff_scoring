@@ -1,0 +1,169 @@
+import os
+import argparse
+from pathlib import Path
+import sys
+from tqdm import tqdm
+
+sys.path.append("auto_banff_scoring/Monkey_TIAKong")
+sys.path.append(str(Path(__file__).resolve().parent / "src" / "utils"))
+
+import torch
+import ttach as tta
+import numpy as np
+from tiffslide import TiffSlide
+
+from monkey.config import PredictionIOConfig
+from monkey.data.data_utils import (
+    save_detection_records_monkey,
+    imagenet_normalise_torch,
+    slide_nms,
+)
+from patch_extractor import extract_patches_from_wsi
+from monkey.model.utils import get_activation_function
+from prediction.utils import binary_det_post_process
+
+# Configuration
+MODEL_PATH = Path("/data2/ac2220/auto_banff_scoring/Monkey_TIAKong/models")
+TIAKONG_MODEL_NAME = "tiakong_model.pt"
+OUTPUT_PATH = Path("/data2/ac2220/real/ti3/output")
+
+
+def load_detector(model_path: str) -> torch.nn.Module:
+    model = torch.jit.load(model_path)
+    model.eval().to("cuda")
+    transforms = tta.Compose([
+        tta.HorizontalFlip(),
+        tta.VerticalFlip(),
+        tta.Rotate90(angles=[0, 90, 180, 270]),
+    ])
+    return tta.SegmentationTTAWrapper(model, transforms)
+
+
+def get_slide_mpp(slide_path: str) -> float:
+    try:
+        slide = TiffSlide(slide_path)
+        mpp_x = slide.properties.get("tiffslide.mpp-x") or slide.properties.get("openslide.mpp-x")
+        return float(mpp_x) if mpp_x else 0.25
+    except Exception as e:
+        print(f"⚠️ Could not extract MPP from {slide_path}: {e}")
+        return 0.25
+
+
+def run_patch_inference(wsi_path: str, model, patch_size: int = 2048, level: int = 0):
+    slide_name = os.path.splitext(os.path.basename(wsi_path))[0]
+    output_path = OUTPUT_PATH / slide_name
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    patch_size = 256
+    stride = 224
+    overlap = 1 - (stride / patch_size)  # → 0.125
+
+    patches = extract_patches_from_wsi(
+        wsi_path=wsi_path,
+        patch_size=patch_size,
+        overlap=overlap,
+        level=0,
+        tissue_threshold=0.05,
+        create_debug_images=False,
+        debug_output_dir="./debug",
+        num_patches=float("inf"),
+        exclusion_conditions=[],
+        exclusion_mode="any",
+        extraction_mode="contiguous",
+        save_patches=False,
+        output_dir=str(output_path),
+        label=None
+    )
+
+    if not patches:
+        print(f"❌ No valid patches found in {slide_name}")
+        return
+
+    batch_size = 16
+    activation_dict = {
+        "head_1": get_activation_function("sigmoid"),
+        "head_2": get_activation_function("sigmoid"),
+        "head_3": get_activation_function("sigmoid"),
+    }
+
+    detected = {"inflamm": [], "lymph": [], "mono": []}
+
+    for i in tqdm(range(0, len(patches), batch_size), desc=f"Inference on {slide_name}"):
+        batch = patches[i:i+batch_size]
+        imgs = [p[0] for p in batch]
+        coords = [(p[1], p[2]) for p in batch]
+
+        imgs_tensor = torch.from_numpy(np.stack(imgs)).permute(0, 3, 1, 2).float() / 255.0
+        imgs_tensor = imagenet_normalise_torch(imgs_tensor).to("cuda")
+
+        with torch.no_grad():
+            outputs = model(imgs_tensor)
+
+        for j, out in enumerate(outputs):
+            x, y = coords[j]
+            patch = batch[j][0]
+            height, width = patch.shape[:2]
+            out = out.cpu()
+
+            for head_idx, label in enumerate(["inflamm", "lymph", "mono"]):
+                seg_idx = head_idx * 3
+                det_idx = seg_idx + 2
+
+                seg_prob = activation_dict[f"head_{head_idx+1}"](out[seg_idx])
+                det_prob = activation_dict[f"head_{head_idx+1}"](out[det_idx])
+                blended = 0.4 * seg_prob + 0.6 * det_prob
+
+                processed_mask = binary_det_post_process(
+                    blended.numpy(),
+                    thresholds=[0.5, 0.5, 0.5][head_idx],
+                    min_distances=[11, 11, 11][head_idx]
+                )
+
+                points = np.argwhere(processed_mask > 0)
+                for r, c in points:
+                    detected[label].append({
+                        "x": x + c,
+                        "y": y + r,
+                        "type": {"inflamm": "inflammatory", "lymph": "lymphocyte", "mono": "monocyte"}[label],
+                        "prob": float(blended[r, c].item())
+                    })
+
+    print(f"📏 Raw detections: {len(detected['inflamm'])} inflamm, {len(detected['lymph'])} lymph, {len(detected['mono'])} mono")
+
+    max_y = max([p["y"] for v in detected.values() for p in v], default=0)
+    max_x = max([p["x"] for v in detected.values() for p in v], default=0)
+    binary_mask = np.ones((max_y + 100, max_x + 100), dtype=np.uint8)
+
+    base_mpp = get_slide_mpp(wsi_path)
+    config = PredictionIOConfig(
+        wsi_dir=os.path.dirname(wsi_path),
+        mask_dir=os.path.dirname(wsi_path),
+        output_dir=str(output_path),
+        patch_size=patch_size,
+        resolution=0,
+        units="level",
+        stride=240, #224
+        thresholds=[0.5, 0.5, 0.5],
+        min_distances=[11, 11, 11],
+        nms_boxes=[11, 11, 11],
+        nms_overlap_thresh=0.5,
+    )
+
+    inflamm_nms = slide_nms(None, binary_mask, detected["inflamm"], 4096, 11, 0.5)
+    lymph_nms = slide_nms(None, binary_mask, detected["lymph"], 4096, 11, 0.5)
+    mono_nms = slide_nms(None, binary_mask, detected["mono"], 4096, 11, 0.5)
+
+    save_detection_records_monkey(
+        config, inflamm_nms, lymph_nms, mono_nms, wsi_id=None, save_mpp=base_mpp
+    )
+
+    print(f"✅ Final saved: {len(inflamm_nms)} inflamm, {len(lymph_nms)} lymph, {len(mono_nms)} mono")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Patch-based TIAKong inference w/ post-processing")
+    parser.add_argument("--wsi", type=str, required=True, help="Path to a .svs WSI file")
+    args = parser.parse_args()
+
+    model = load_detector(str(MODEL_PATH / TIAKONG_MODEL_NAME))
+    run_patch_inference(args.wsi, model)
