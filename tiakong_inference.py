@@ -1,7 +1,8 @@
 import os
 import argparse
-from pathlib import Path
 import sys
+import time
+from pathlib import Path
 from tqdm import tqdm
 
 sys.path.append("auto_banff_scoring/Monkey_TIAKong")
@@ -22,11 +23,10 @@ from patch_extractor import extract_patches_from_wsi
 from monkey.model.utils import get_activation_function
 from prediction.utils import binary_det_post_process
 
-# Configuration
 MODEL_PATH = Path("/data2/ac2220/auto_banff_scoring/Monkey_TIAKong/models")
 TIAKONG_MODEL_NAME = "tiakong_model.pt"
 OUTPUT_PATH = Path("/data2/ac2220/real/ti3/output")
-
+LOG_PATH = Path(OUTPUT_PATH / "inference_log.txt")
 
 def load_detector(model_path: str) -> torch.nn.Module:
     model = torch.jit.load(model_path)
@@ -38,7 +38,6 @@ def load_detector(model_path: str) -> torch.nn.Module:
     ])
     return tta.SegmentationTTAWrapper(model, transforms)
 
-
 def get_slide_mpp(slide_path: str) -> float:
     try:
         slide = TiffSlide(slide_path)
@@ -48,15 +47,12 @@ def get_slide_mpp(slide_path: str) -> float:
         print(f"⚠️ Could not extract MPP from {slide_path}: {e}")
         return 0.25
 
-
-def run_patch_inference(wsi_path: str, model, patch_size: int = 2048, level: int = 0):
+def run_patch_inference(wsi_path: str, model, patch_size: int = 256, stride: int = 224):
     slide_name = os.path.splitext(os.path.basename(wsi_path))[0]
     output_path = OUTPUT_PATH / slide_name
     output_path.mkdir(parents=True, exist_ok=True)
 
-    patch_size = 256
-    stride = 224
-    overlap = 1 - (stride / patch_size)  # → 0.125
+    overlap = 1 - (stride / patch_size)
 
     patches = extract_patches_from_wsi(
         wsi_path=wsi_path,
@@ -77,7 +73,7 @@ def run_patch_inference(wsi_path: str, model, patch_size: int = 2048, level: int
 
     if not patches:
         print(f"❌ No valid patches found in {slide_name}")
-        return
+        return 0, 0, 0
 
     batch_size = 16
     activation_dict = {
@@ -128,8 +124,6 @@ def run_patch_inference(wsi_path: str, model, patch_size: int = 2048, level: int
                         "prob": float(blended[r, c].item())
                     })
 
-    print(f"📏 Raw detections: {len(detected['inflamm'])} inflamm, {len(detected['lymph'])} lymph, {len(detected['mono'])} mono")
-
     max_y = max([p["y"] for v in detected.values() for p in v], default=0)
     max_x = max([p["x"] for v in detected.values() for p in v], default=0)
     binary_mask = np.ones((max_y + 100, max_x + 100), dtype=np.uint8)
@@ -142,7 +136,7 @@ def run_patch_inference(wsi_path: str, model, patch_size: int = 2048, level: int
         patch_size=patch_size,
         resolution=0,
         units="level",
-        stride=240, #224
+        stride=stride,
         thresholds=[0.5, 0.5, 0.5],
         min_distances=[11, 11, 11],
         nms_boxes=[11, 11, 11],
@@ -158,12 +152,33 @@ def run_patch_inference(wsi_path: str, model, patch_size: int = 2048, level: int
     )
 
     print(f"✅ Final saved: {len(inflamm_nms)} inflamm, {len(lymph_nms)} lymph, {len(mono_nms)} mono")
+    return len(inflamm_nms), len(lymph_nms), len(mono_nms)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Patch-based TIAKong inference w/ post-processing")
-    parser.add_argument("--wsi", type=str, required=True, help="Path to a .svs WSI file")
+    parser = argparse.ArgumentParser(description="Run patch-based TIAKong inference.")
+    parser.add_argument("--wsi", type=str, help="Path to a single .svs file.")
+    parser.add_argument("--wsi_dir", type=str, help="Directory containing .svs files.")
     args = parser.parse_args()
 
     model = load_detector(str(MODEL_PATH / TIAKONG_MODEL_NAME))
-    run_patch_inference(args.wsi, model)
+
+    with open(LOG_PATH, "w") as log_file:
+        log_file.write("slide_name,time_seconds,inflammatory,lymphocyte,monocyte\n")
+
+        if args.wsi:
+            start = time.time()
+            inflamm, lymph, mono = run_patch_inference(args.wsi, model)
+            elapsed = time.time() - start
+            log_file.write(f"{Path(args.wsi).name},{elapsed:.2f},{inflamm},{lymph},{mono}\n")
+
+        elif args.wsi_dir:
+            wsi_dir = Path(args.wsi_dir)
+            for slide_path in sorted(wsi_dir.glob("*.svs")):
+                start = time.time()
+                inflamm, lymph, mono = run_patch_inference(str(slide_path), model)
+                elapsed = time.time() - start
+                log_file.write(f"{slide_path.name},{elapsed:.2f},{inflamm},{lymph},{mono}\n")
+                log_file.flush()
+        else:
+            print("❌ Please provide either --wsi or --wsi_dir.")
