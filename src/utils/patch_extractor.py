@@ -43,6 +43,7 @@ def extract_patches_from_wsi(
     save_patches=False,
     output_dir=None,
     label=None,
+    save_bbox_file=True,
 ):
     """
     Extract patches from tissue regions in a whole slide image (WSI)
@@ -64,6 +65,7 @@ def extract_patches_from_wsi(
         save_patches (bool): Whether to save patches to disk
         output_dir (str, optional): Directory to save patches and metadata
         label (str, optional): Optional label/class for the patches (used for organizing output)
+        save_bbox_file (bool): Whether to save bounding box coordinates to a text file
 
     Returns:
         If save_patches=False:
@@ -136,6 +138,7 @@ def extract_patches_from_wsi(
 
     # Initialize tracking
     patches = []
+    bbox_coords = []  # List to store bbox coordinates (ymin, xmin, ymax, xmax)
     count = 0
 
     # Calculate downsample factor based on slide size
@@ -266,7 +269,7 @@ def extract_patches_from_wsi(
                 and all(satisfied_conditions)
                 and satisfied_conditions
             ):
-                should_exclude = Trueg
+                should_exclude = True
 
             if should_exclude:
                 if create_debug_images and len(satisfied_conditions) > 0:
@@ -299,6 +302,12 @@ def extract_patches_from_wsi(
             if should_infer:
                 # Store patch with coordinates
                 patches.append((patch_np, full_x, full_y))
+                
+                # Store bbox coordinates (ymin, xmin, ymax, xmax)
+                ymin, xmin = full_y, full_x
+                ymax, xmax = full_y + patch_size, full_x + patch_size
+                bbox_coords.append((ymin, xmin, ymax, xmax))
+                
                 print(
                     f"Patch {count} at position x={full_x}, y={full_y} is a tissue patch"
                 )
@@ -482,6 +491,12 @@ def extract_patches_from_wsi(
             if should_infer:
                 # Store patch with coordinates
                 patches.append((patch_np, full_x, full_y))
+                
+                # Store bbox coordinates (ymin, xmin, ymax, xmax)
+                ymin, xmin = full_y, full_x
+                ymax, xmax = full_y + patch_size, full_x + patch_size
+                bbox_coords.append((ymin, xmin, ymax, xmax))
+                
                 if (
                     count % 100 == 0
                 ):  # Print every 100 patches to avoid flooding console
@@ -529,6 +544,14 @@ def extract_patches_from_wsi(
         debug_path = os.path.join(debug_output_dir, "patch_debug_overlay.png")
         downsampled.save(debug_path)
 
+    # Save the bbox coordinates to a text file
+    if save_bbox_file:
+        bbox_file = "bbox_coordinates.txt"
+        with open(bbox_file, 'w') as f:
+            for ymin, xmin, ymax, xmax in bbox_coords:
+                f.write(f"{ymin} {xmin} {ymax} {xmax}\n")
+        print(f"Saved {len(bbox_coords)} bbox coordinates to {bbox_file}")
+
     print(f"Extracted {count} patches from {wsi_path}")
     slide.close()
 
@@ -550,7 +573,8 @@ overlap = 0  # 25% overlap between patches
 level = 0
 tissue_threshold = 0.05
 debug_output_dir = "debug_output"
-num_patches = float("inf")
+extraction_mode = "contiguous"
+num_patches = float("inf") if extraction_mode == "contiguous" else 20
 
 # Example 1: Exclude patches with x < 33500 at base resolution
 # exclusion_conditions = [('y', '>', 55000)]
@@ -558,7 +582,7 @@ num_patches = float("inf")
 # /vol/biomedic3/histopatho/win_share/2024-07-04/anon_61040e50-c3a5-4abb-917b-86433bb84aa5.svs (Silver x>109962, y<13390, x<14840, y>68128)
 exclusion_conditions = []
 
-wsi_path = "/vol/biomedic3/histopatho/win_share/2025-01-02/anon_2bb2f1fb-2a23-49cf-a632-79c704ebc454.svs"
+wsi_path = sys.argv[1]
 
 output_dir = "./tmp"
 # Extract patches from the WSI
@@ -573,10 +597,11 @@ result = extract_patches_from_wsi(
     num_patches=num_patches,
     exclusion_conditions=exclusion_conditions,
     exclusion_mode="any",  # 'any' or 'all'
-    extraction_mode="contiguous",  # 'random' or 'contiguous'
+    extraction_mode=extraction_mode,  # 'random' or 'contiguous'
     save_patches=False,  # Set to True to save patches to disk
     output_dir=output_dir,  # Directory to save patches when save_patches=True
     label=None,  # Optional class/label for organizing patches
+    save_bbox_file=True,  # Save bbox coordinates to a file
 )
 
 # Handle result based on whether patches were saved
@@ -595,9 +620,7 @@ else:
         )
 
 # Save patches to the output directory
-
 os.makedirs(output_dir, exist_ok=True)
-
 slide_name = os.path.splitext(os.path.basename(wsi_path))[0]
 
 # # Save each patch to the output directory
@@ -606,8 +629,8 @@ slide_name = os.path.splitext(os.path.basename(wsi_path))[0]
 #     patch_path = os.path.join(output_dir, patch_filename)
 #     patch_pil = Image.fromarray(patch_np)
 #     patch_pil.save(patch_path)
-
+#
 #     if i % 100 == 0:
 #         print(f"Saved {i}/{len(patches)} patches")
-
+#
 # print(f"Successfully saved {len(patches)} patches to {output_dir}")
