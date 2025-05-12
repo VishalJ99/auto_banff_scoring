@@ -23,7 +23,7 @@ from patch_extractor import extract_patches_from_wsi
 from monkey.model.utils import get_activation_function
 from prediction.utils import binary_det_post_process
 
-MODEL_PATH = Path("/data2/ac2220/auto_banff_scoring/Monkey_TIAKong/models")
+MODEL_PATH = Path("/data2/ac2220/tiakong_model/tiakong_model.pt")
 TIAKONG_MODEL_NAME = "tiakong_model.pt"
 OUTPUT_PATH = Path("/data2/ac2220/real/ti3/output")
 LOG_PATH = Path(OUTPUT_PATH / "inference_log2b.txt")
