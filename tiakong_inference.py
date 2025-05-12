@@ -26,7 +26,7 @@ from prediction.utils import binary_det_post_process
 MODEL_PATH = Path("/data2/ac2220/auto_banff_scoring/Monkey_TIAKong/models")
 TIAKONG_MODEL_NAME = "tiakong_model.pt"
 OUTPUT_PATH = Path("/data2/ac2220/real/ti3/output")
-LOG_PATH = Path(OUTPUT_PATH / "inference_log.txt")
+LOG_PATH = Path(OUTPUT_PATH / "inference_log2b.txt")
 
 def load_detector(model_path: str) -> torch.nn.Module:
     model = torch.jit.load(model_path)
@@ -47,7 +47,7 @@ def get_slide_mpp(slide_path: str) -> float:
         print(f"⚠️ Could not extract MPP from {slide_path}: {e}")
         return 0.25
 
-def run_patch_inference(wsi_path: str, model, patch_size: int = 256, stride: int = 224):
+def run_patch_inference(wsi_path: str, model, patch_size: int = 256, stride: int = 224, threshold: float = 0.5):
     slide_name = os.path.splitext(os.path.basename(wsi_path))[0]
     output_path = OUTPUT_PATH / slide_name
     output_path.mkdir(parents=True, exist_ok=True)
@@ -110,8 +110,8 @@ def run_patch_inference(wsi_path: str, model, patch_size: int = 256, stride: int
                 blended = 0.4 * seg_prob + 0.6 * det_prob
 
                 processed_mask = binary_det_post_process(
-                    blended.numpy(),
-                    thresholds=[0.5, 0.5, 0.5][head_idx],
+                    blended.cpu().numpy(),
+                    thresholds=threshold,
                     min_distances=[11, 11, 11][head_idx]
                 )
 
@@ -159,6 +159,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run patch-based TIAKong inference.")
     parser.add_argument("--wsi", type=str, help="Path to a single .svs file.")
     parser.add_argument("--wsi_dir", type=str, help="Directory containing .svs files.")
+    parser.add_argument("--threshold", type=float, default=0.5, help="Detection threshold (default: 0.5)")
     args = parser.parse_args()
 
     model = load_detector(str(MODEL_PATH / TIAKONG_MODEL_NAME))
@@ -176,7 +177,7 @@ if __name__ == "__main__":
             wsi_dir = Path(args.wsi_dir)
             for slide_path in sorted(wsi_dir.glob("*.svs")):
                 start = time.time()
-                inflamm, lymph, mono = run_patch_inference(str(slide_path), model)
+                inflamm, lymph, mono = run_patch_inference(str(slide_path), model, threshold=args.threshold)
                 elapsed = time.time() - start
                 log_file.write(f"{slide_path.name},{elapsed:.2f},{inflamm},{lymph},{mono}\n")
                 log_file.flush()
