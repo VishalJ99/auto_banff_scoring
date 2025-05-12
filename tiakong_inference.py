@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from tqdm import tqdm
 
-sys.path.append("auto_banff_scoring/Monkey_TIAKong")
+sys.path.append(str(Path(__file__).resolve().parent / "Monkey_TIAKong"))
 sys.path.append(str(Path(__file__).resolve().parent / "src" / "utils"))
 
 import torch
@@ -23,10 +23,10 @@ from patch_extractor import extract_patches_from_wsi
 from monkey.model.utils import get_activation_function
 from prediction.utils import binary_det_post_process
 
-MODEL_PATH = Path("/data2/ac2220/tiakong_model/tiakong_model.pt")
+MODEL_PATH = Path("/data2/ac2220/tiakong_model")
 TIAKONG_MODEL_NAME = "tiakong_model.pt"
-OUTPUT_PATH = Path("/data2/ac2220/real/ti3/output")
-LOG_PATH = Path(OUTPUT_PATH / "inference_log2b.txt")
+OUTPUT_PATH = Path("/data2/ac2220/real/ti0/output")
+LOG_PATH = Path(OUTPUT_PATH / "inference_log6b.txt")
 
 def load_detector(model_path: str) -> torch.nn.Module:
     model = torch.jit.load(model_path)
