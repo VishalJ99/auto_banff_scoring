@@ -1,0 +1,4 @@
+[core]
+    remote = backup
+['remote "backup"']
+    url = ssh://vj724@mnemosyne:/data/vj_backup/inflam_cell_detection
