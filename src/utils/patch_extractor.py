@@ -1,5 +1,7 @@
 # debug_patch_extraction.ipynb
 import sys
+import argparse
+from typing import Optional, List, Tuple, Union, Dict, Any
 
 sys.path.append("../src")  # Add src directory to path
 
@@ -29,22 +31,23 @@ def is_tissue_patch(patch_np, threshold=0.15):
 
 
 def extract_patches_from_wsi(
-    wsi_path,
-    patch_size=256,
-    overlap=0.25,
-    level=0,
-    tissue_threshold=0.05,
-    create_debug_images=True,
-    debug_output_dir=None,
-    num_patches=1000,
-    exclusion_conditions=None,
-    exclusion_mode="any",
-    extraction_mode="random",
-    save_patches=False,
-    output_dir=None,
-    label=None,
-    save_bbox_file=True,
-):
+    wsi_path: str,
+    patch_size: int = 256,
+    overlap: float = 0.25,
+    level: int = 0,
+    tissue_threshold: float = 0.05,
+    create_debug_images: bool = True,
+    debug_output_dir: Optional[str] = None,
+    num_patches: Union[int, float] = 1000,
+    exclusion_conditions: Optional[List[Tuple[str, str, int]]] = None,
+    exclusion_mode: str = "any",
+    extraction_mode: str = "random",
+    save_patches: bool = False,
+    output_dir: Optional[str] = None,
+    label: Optional[str] = None,
+    save_bbox_file: bool = True,
+    bbox_output_path: str = "bbox_coordinates.txt",
+) -> Union[List[Tuple[np.ndarray, int, int]], Tuple[List[Tuple[np.ndarray, int, int]], Dict[str, Any]]]:
     """
     Extract patches from tissue regions in a whole slide image (WSI)
 
@@ -56,22 +59,20 @@ def extract_patches_from_wsi(
         tissue_threshold (float): Minimum tissue percentage threshold
         create_debug_images (bool): Whether to create debug overlay images
         debug_output_dir (str, optional): Directory to save debug images
-        num_patches (int): Maximum number of patches to extract (only used in random mode)
-        exclusion_conditions (list): List of tuples (coord, operator, value) for exclusion criteria
-                                    e.g. [('x', '<', 33500)] to exclude patches with x < 33500
-                                    Coordinates are at base/original resolution (level 0)
+        num_patches (Union[int, float]): Maximum number of patches to extract (only used in random mode)
+        exclusion_conditions (List[Tuple[str, str, int]], optional): List of tuples (coord, operator, value) for exclusion criteria
         exclusion_mode (str): 'any' to exclude if any condition is met, 'all' for all conditions
         extraction_mode (str): 'random' to extract random patches, 'contiguous' for grid-based patches
         save_patches (bool): Whether to save patches to disk
         output_dir (str, optional): Directory to save patches and metadata
         label (str, optional): Optional label/class for the patches (used for organizing output)
         save_bbox_file (bool): Whether to save bounding box coordinates to a text file
+        bbox_output_path (str): Path where to save the bbox coordinates file
 
     Returns:
-        If save_patches=False:
-            list: List of tuples (patch_np, x, y) where patch_np is the numpy array and x,y are coordinates
-        If save_patches=True:
-            tuple: (patch_list, metadata_dict)
+        Union[List[Tuple[np.ndarray, int, int]], Tuple[List[Tuple[np.ndarray, int, int]], Dict[str, Any]]]:
+            If save_patches=False: List of tuples (patch_np, x, y)
+            If save_patches=True: Tuple of (patch_list, metadata_dict)
     """
     # Initialize exclusion conditions if not provided
     if exclusion_conditions is None:
@@ -546,23 +547,20 @@ def extract_patches_from_wsi(
 
     # Save the bbox coordinates to a text file
     if save_bbox_file:
-        bbox_file = "bbox_coordinates.txt"
-        with open(bbox_file, 'w') as f:
+        with open(bbox_output_path, 'w') as f:
             for ymin, xmin, ymax, xmax in bbox_coords:
                 f.write(f"{ymin} {xmin} {ymax} {xmax}\n")
-        print(f"Saved {len(bbox_coords)} bbox coordinates to {bbox_file}")
+        print(f"Saved {len(bbox_coords)} bbox coordinates to {bbox_output_path}")
 
     print(f"Extracted {count} patches from {wsi_path}")
     slide.close()
 
     # Save metadata if patches were saved
-    if save_patches:
+    if save_patches and output_dir is not None:
         metadata_path = os.path.join(slide_output_dir, f"{slide_name}_metadata.json")
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
         print(f"Saved {count} patches and metadata to {slide_output_dir}")
-
-        return patches, metadata
 
     return patches
 
@@ -576,13 +574,21 @@ debug_output_dir = "debug_output"
 extraction_mode = "contiguous"
 num_patches = float("inf") if extraction_mode == "contiguous" else 20
 
+# Set up argument parser
+parser = argparse.ArgumentParser(description='Extract patches from WSI')
+parser.add_argument('wsi_path', help='Path to the WSI file')
+parser.add_argument('--bbox-output', default='bbox_coordinates.txt',
+                    help='Path to save bbox coordinates (default: bbox_coordinates.txt)')
+args = parser.parse_args()
+
+wsi_path = args.wsi_path
+bbox_output_path = args.bbox_output
+
 # Example 1: Exclude patches with x < 33500 at base resolution
 # exclusion_conditions = [('y', '>', 55000)]
 # /vol/biomedic3/histopatho/win_share/2024-07-04/anon_645bcdac-3e6c-4ec4-bcb1-619c1ee76517.svs (IHC x>53052, y<25378, x<34588, y>64119)
 # /vol/biomedic3/histopatho/win_share/2024-07-04/anon_61040e50-c3a5-4abb-917b-86433bb84aa5.svs (Silver x>109962, y<13390, x<14840, y>68128)
 exclusion_conditions = []
-
-wsi_path = sys.argv[1]
 
 output_dir = "./tmp"
 # Extract patches from the WSI
@@ -594,7 +600,7 @@ result = extract_patches_from_wsi(
     tissue_threshold=tissue_threshold,
     create_debug_images=True,
     debug_output_dir=debug_output_dir,
-    num_patches=num_patches,
+    num_patches=int(num_patches) if num_patches != float("inf") else float("inf"),  # Convert to int if not inf
     exclusion_conditions=exclusion_conditions,
     exclusion_mode="any",  # 'any' or 'all'
     extraction_mode=extraction_mode,  # 'random' or 'contiguous'
@@ -602,6 +608,7 @@ result = extract_patches_from_wsi(
     output_dir=output_dir,  # Directory to save patches when save_patches=True
     label=None,  # Optional class/label for organizing patches
     save_bbox_file=True,  # Save bbox coordinates to a file
+    bbox_output_path=bbox_output_path,  # Use the command line argument
 )
 
 # Handle result based on whether patches were saved
