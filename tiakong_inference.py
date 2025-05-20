@@ -25,8 +25,8 @@ from prediction.utils import binary_det_post_process
 
 MODEL_PATH = Path("/data2/ac2220/tiakong_model")
 TIAKONG_MODEL_NAME = "tiakong_model.pt"
-OUTPUT_PATH = Path("/data2/ac2220/real/ti0/output")
-LOG_PATH = Path(OUTPUT_PATH / "inference_log6b.txt")
+OUTPUT_PATH = Path("/data2/ac2220/real/ti2/output")
+LOG_PATH = Path(OUTPUT_PATH / "inference_log.txt")
 
 # Load the TorchScript model and wrap it in TTA for inference
 def load_detector(model_path: str) -> torch.nn.Module:
@@ -185,7 +185,7 @@ if __name__ == "__main__":
         if args.wsi:
             start = time.time()
             inflamm, lymph, mono = run_patch_inference(args.wsi, model)
-            elapsed = time.time() - start
+            elapsed = (time.time() - start) / 60
             log_file.write(f"{Path(args.wsi).name},{elapsed:.2f},{inflamm},{lymph},{mono}\n")
 
         elif args.wsi_dir:
@@ -193,7 +193,7 @@ if __name__ == "__main__":
             for slide_path in sorted(wsi_dir.glob("*.svs")):
                 start = time.time()
                 inflamm, lymph, mono = run_patch_inference(str(slide_path), model, threshold=args.threshold)
-                elapsed = time.time() - start / 60
+                elapsed = (time.time() - start) / 60
                 log_file.write(f"{slide_path.name},{elapsed:.2f},{inflamm},{lymph},{mono}\n")
                 log_file.flush()
         else:
