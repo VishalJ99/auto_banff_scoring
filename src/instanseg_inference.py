@@ -29,7 +29,6 @@ PATCH_SIZE = 128
 USE_TTA = True
 NORMALIZE_HE = False
 RESCALE_OUTPUT = False if DESTINATION_PIXEL_SIZE == 0.5 else True
-ORIGINAL_PIXEL_SIZE = 0.24199951445730394
 
 
 class ModelEnsemble(torch.nn.Module):
@@ -70,6 +69,38 @@ def parse_arguments():
     return parser.parse_args()
 
 
+def get_pixel_size_from_svs(slide):
+    """Read pixel size from SVS slide object.
+    
+    Args:
+        slide: TiffSlide object
+        
+    Returns:
+        float: Pixel size in microns per pixel
+        
+    Raises:
+        ValueError: If pixel size cannot be read or if non-uniform scaling detected
+    """
+    try:
+        mpp_x = float(slide.properties['tiffslide.mpp-x'])
+        mpp_y = float(slide.properties['tiffslide.mpp-y'])
+        
+        # Check for non-uniform scaling
+        if abs(mpp_x - mpp_y) > 1e-6:  # Small tolerance for floating point comparison
+            print(f"Warning: Non-uniform pixel scaling detected!")
+            print(f"  mpp-x: {mpp_x} μm/pixel")
+            print(f"  mpp-y: {mpp_y} μm/pixel")
+            print(f"This script cannot handle non-uniform scaling. Using mpp-x value.")
+        
+        print(f"Read pixel size from SVS: {mpp_x} μm/pixel")
+        return mpp_x
+        
+    except KeyError as e:
+        raise ValueError(f"Could not read pixel size from SVS metadata: missing property {e}")
+    except ValueError as e:
+        raise ValueError(f"Could not parse pixel size from SVS metadata: {e}")
+
+
 def load_models(model_dir):
     """Load InstanSeg and classifier models."""
     # Load InstanSeg model
@@ -88,7 +119,7 @@ def load_models(model_dir):
     return instanseg_model, classifier
 
 
-def process_bbox(slide, bbox, instanseg_model, classifier):
+def process_bbox(slide, bbox, instanseg_model, classifier, original_pixel_size):
     """Process a single bounding box region of the slide."""
     # Extract bbox coordinates
     y1, x1, y2, x2 = bbox
@@ -101,7 +132,7 @@ def process_bbox(slide, bbox, instanseg_model, classifier):
     
     # Run InstanSeg model
     labels, input_tensor = instanseg_model.eval_medium_image(
-        image, pixel_size=ORIGINAL_PIXEL_SIZE, 
+        image, pixel_size=original_pixel_size, 
         rescale_output=RESCALE_OUTPUT, 
         seed_threshold=0.1, 
         tile_size=1024
@@ -110,7 +141,7 @@ def process_bbox(slide, bbox, instanseg_model, classifier):
     # Convert image to tensor
     tensor = _rescale_to_pixel_size(
         _to_tensor_float32(image), 
-        ORIGINAL_PIXEL_SIZE, 
+        original_pixel_size, 
         DESTINATION_PIXEL_SIZE
     ).to("cpu")
     
@@ -151,7 +182,7 @@ def process_bbox(slide, bbox, instanseg_model, classifier):
     coords = centroids_from_lab(labels)[0]
     
     # Scale coordinates back to original scale
-    coords_scaled = coords.cpu().numpy()[:, ::-1] * (DESTINATION_PIXEL_SIZE / ORIGINAL_PIXEL_SIZE) + bbox_native[0][::-1]
+    coords_scaled = coords.cpu().numpy()[:, ::-1] * (DESTINATION_PIXEL_SIZE / original_pixel_size) + bbox_native[0][::-1]
     
     return {
         'coords': coords_scaled,
@@ -160,7 +191,7 @@ def process_bbox(slide, bbox, instanseg_model, classifier):
     }
 
 
-def create_output_dicts(all_coords, all_classes, all_confidences):
+def create_output_dicts(all_coords, all_classes, all_confidences, original_pixel_size):
     """Create dictionaries for output JSON files."""
     # Initialize output dictionaries
     output_dicts = {
@@ -189,13 +220,13 @@ def create_output_dicts(all_coords, all_classes, all_confidences):
         x, y = coords
         
         # Convert to millimeters
-        x_mm = x * ORIGINAL_PIXEL_SIZE / 1000
-        y_mm = y * ORIGINAL_PIXEL_SIZE / 1000
+        x_mm = x * original_pixel_size / 1000
+        y_mm = y * original_pixel_size / 1000
         
         # Create point records
         point_data = {
             "name": f"Point {idx}",
-            "point": [x_mm, y_mm, ORIGINAL_PIXEL_SIZE],
+            "point": [x_mm, y_mm, original_pixel_size],
         }
         
         # Add points with their probabilities
@@ -293,6 +324,9 @@ def main():
     # Open slide
     slide = TiffSlide(args.wsi_path)
     
+    # Read pixel size from SVS slide
+    original_pixel_size = get_pixel_size_from_svs(slide)
+    
     # Process bounding boxes from file if provided
     bbox_list = []
     if args.bbox_file:
@@ -319,7 +353,7 @@ def main():
             if i + 3 < len(args.bbox):
                 bbox = args.bbox[i:i+4]
                 print(f"Processing bbox: {bbox}")
-                result = process_bbox(slide, bbox, instanseg_model, classifier)
+                result = process_bbox(slide, bbox, instanseg_model, classifier, original_pixel_size)
                 all_results.append(result)
     else:
         # Process entire slide (not implemented in original code)
@@ -333,7 +367,7 @@ def main():
     
     # Create and save output files
     lymphocytes_dict, monocytes_dict, inflammatory_dict = create_output_dicts(
-        all_coords, all_classes, all_confidences)
+        all_coords, all_classes, all_confidences, original_pixel_size)
     
     save_outputs(args.output_dir, lymphocytes_dict, monocytes_dict, inflammatory_dict, args.wsi_path)
     
