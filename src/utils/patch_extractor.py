@@ -566,11 +566,10 @@ def extract_patches_from_wsi(
 
 
 # Define parameters for patch extraction
-patch_size = 2048
+patch_size = 1024
 overlap = 0  # 25% overlap between patches
 level = 0
 tissue_threshold = 0.05
-debug_output_dir = "debug_output"
 extraction_mode = "contiguous"
 num_patches = float("inf") if extraction_mode == "contiguous" else 20
 
@@ -579,10 +578,13 @@ parser = argparse.ArgumentParser(description='Extract patches from WSI')
 parser.add_argument('wsi_path', help='Path to the WSI file')
 parser.add_argument('--bbox-output', default='bbox_coordinates.txt',
                     help='Path to save bbox coordinates (default: bbox_coordinates.txt)')
+parser.add_argument("--debug_dir", default="debug_output")
 args = parser.parse_args()
 
 wsi_path = args.wsi_path
 bbox_output_path = args.bbox_output
+debug_output_dir = args.debug_dir
+
 
 # Example 1: Exclude patches with x < 33500 at base resolution
 # exclusion_conditions = [('y', '>', 55000)]
