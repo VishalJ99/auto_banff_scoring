@@ -1,11 +1,10 @@
+# ABOUTME: Converts cell detection JSON files (with mm coordinates) to GeoJSON format for QuPath visualization
+# ABOUTME: Input: detection JSON file with points in mm, Output: GeoJSON with polygon annotations in pixels
+
 import json
 import argparse
 import os
-
-# --- Constants ---
-MICRONS_PER_PIXEL = 0.242
-MM_TO_MICRONS = 1000
-PIXELS_PER_MM = MM_TO_MICRONS / MICRONS_PER_PIXEL
+from tiatoolbox.wsicore.wsireader import WSIReader
 
 # Default classification properties (matching your example)
 DEFAULT_CLASSIFICATION_NAME = "lymphocytes"
@@ -13,11 +12,12 @@ DEFAULT_CLASSIFICATION_NAME = "lymphocytes"
 DEFAULT_CLASSIFICATION_COLOR = [244, 250, 88]
 DEFAULT_OBJECT_TYPE = "annotation"
 
-def mm_to_pixels(coord_mm):
-    """Converts a coordinate from millimeters to pixels."""
-    return coord_mm * PIXELS_PER_MM
+def mm_to_pixels(coord_mm, mpp):
+    """Converts a coordinate from millimeters to pixels using actual resolution."""
+    mm_to_microns = 1000
+    return coord_mm * mm_to_microns / mpp
 
-def create_geojson_feature(point_data, box_size_px):
+def create_geojson_feature(point_data, box_size_px, mpp):
     """Creates a GeoJSON Feature dictionary for a single detection point."""
 
     point_name = point_data.get("name", "Unknown Point")
@@ -31,9 +31,9 @@ def create_geojson_feature(point_data, box_size_px):
     # Extract mm coordinates (ignore Z if present)
     x_mm, y_mm = point_coords_mm[0], point_coords_mm[1]
 
-    # Convert center coordinates to pixels
-    center_x_px = mm_to_pixels(x_mm)
-    center_y_px = mm_to_pixels(y_mm)
+    # Convert center coordinates to pixels using actual resolution
+    center_x_px = mm_to_pixels(x_mm, mpp)
+    center_y_px = mm_to_pixels(y_mm, mpp)
 
     # Calculate bounding box pixel coordinates
     half_box = box_size_px / 2.0
@@ -76,8 +76,34 @@ def create_geojson_feature(point_data, box_size_px):
     }
     return feature
 
-def convert_pipeline_output_to_geojson(input_json_path, output_geojson_path, box_size_px, prob_threshold=0.0):
+def get_svs_resolution(svs_path):
+    """Extract the actual resolution (microns per pixel) from SVS file."""
+    try:
+        wsi_reader = WSIReader.open(input_img=svs_path)
+        mpp = wsi_reader.info.mpp[0]  # Assume x and y resolution are the same
+        return mpp
+    except Exception as e:
+        print(f"Error reading SVS resolution: {e}")
+        return None
+
+def convert_pipeline_output_to_geojson(input_json_path, output_geojson_path, box_size_px, prob_threshold=0.0, svs_path=None, mpp=None):
     """Loads pipeline JSON, converts points to GeoJSON features, and saves."""
+
+    # Determine the resolution to use
+    if svs_path:
+        actual_mpp = get_svs_resolution(svs_path)
+        if actual_mpp:
+            print(f"Using resolution from SVS file: {actual_mpp:.6f} microns/pixel")
+            mpp = actual_mpp
+        else:
+            print(f"Warning: Could not read resolution from SVS file, using provided mpp or default")
+    
+    if mpp is None:
+        # Default to challenge data resolution if nothing else specified
+        mpp = 0.24199951445730394
+        print(f"Warning: No resolution specified, using default: {mpp:.6f} microns/pixel")
+    
+    pixels_per_mm = 1000 / mpp
 
     print(f"Loading input JSON from: {input_json_path}")
     try:
@@ -99,7 +125,7 @@ def convert_pipeline_output_to_geojson(input_json_path, output_geojson_path, box
 
     print(f"Processing {len(pipeline_data['points'])} points...")
     print(f"Using bounding box size: {box_size_px}x{box_size_px} pixels")
-    print(f"Conversion rate: {PIXELS_PER_MM:.4f} pixels per mm ({MICRONS_PER_PIXEL} microns/pixel)")
+    print(f"Conversion rate: {pixels_per_mm:.4f} pixels per mm ({mpp} microns/pixel)")
     if prob_threshold > 0.0:
         print(f"Applying probability threshold: {prob_threshold}")
 
@@ -113,7 +139,7 @@ def convert_pipeline_output_to_geojson(input_json_path, output_geojson_path, box
             filtered_count += 1
             continue
             
-        feature = create_geojson_feature(point_data, box_size_px)
+        feature = create_geojson_feature(point_data, box_size_px, mpp)
         if feature:
             geojson_features.append(feature)
 
@@ -165,6 +191,16 @@ if __name__ == "__main__":
         default=0.0, 
         help="Probability threshold (0.0-1.0). Only include detections with probability > threshold. Default: 0.0"
     )
+    parser.add_argument(
+        "--svs_path",
+        type=str,
+        help="Path to the SVS file to read resolution from. If provided, will override --mpp"
+    )
+    parser.add_argument(
+        "--mpp",
+        type=float,
+        help="Microns per pixel resolution. Default: 0.242 (challenge data resolution)"
+    )
 
     args = parser.parse_args()
 
@@ -172,5 +208,7 @@ if __name__ == "__main__":
         args.input_json,
         args.output_geojson,
         args.box_size,
-        args.prob_threshold
+        args.prob_threshold,
+        args.svs_path,
+        args.mpp
     )
