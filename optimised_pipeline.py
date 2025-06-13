@@ -255,14 +255,25 @@ def run_single_slide_optimized(args):
         elapsed = (time.time() - start) / 60
         print(f"🕒 Detection complete in {elapsed:.2f} minutes using {normalization_method} normalization")
 
-        # Extract results - handle both tuple and object returns
+       # Extract results - handle both tuple and object returns
         if isinstance(result, tuple):
+            # Handle tuple return (legacy format)
             inflamm, lymph, mono = result[:3]
+            if len(result) >= 6:
+                # Extract coordinates if available in tuple
+                inflamm_coords, lymph_coords, mono_coords = result[3:6]
+            else:
+                # Fallback to empty lists
+                inflamm_coords, lymph_coords, mono_coords = [], [], []
             norm_stats = None
         else:
+            # Handle InferenceResults object return
             inflamm = result.inflammatory_count
             lymph = result.lymphocyte_count
             mono = result.monocyte_count
+            inflamm_coords = result.inflammatory_coords
+            lymph_coords = result.lymphocyte_coords  
+            mono_coords = result.monocyte_coords
             norm_stats = result.normalization_stats
 
         # Build results
@@ -274,13 +285,16 @@ def run_single_slide_optimized(args):
             "runtime_min": elapsed,
             "cortex_patch_count": len(cortex_coords),
             "total_patch_count": len(coords),
-            "cortex_patch_ratio": len(cortex_coords) / len(coords),
-            "normalization_method": normalization_method,
-            "gpu_used": gpu_id if gpu_id >= 0 else "CPU",
+            "cortex_patch_ratio": len(cortex_coords) / len(coords) if len(coords) > 0 else 0,
             "normalised": {
-                "inflammatory_per_cortex_patch": inflamm / len(cortex_coords),
-                "lymphocyte_per_cortex_patch": lymph / len(cortex_coords),
-                "monocyte_per_cortex_patch": mono / len(cortex_coords),
+                "inflammatory_per_cortex_patch": inflamm / len(cortex_coords) if len(cortex_coords) > 0 else 0,
+                "lymphocyte_per_cortex_patch": lymph / len(cortex_coords) if len(cortex_coords) > 0 else 0,
+                "monocyte_per_cortex_patch": mono / len(cortex_coords) if len(cortex_coords) > 0 else 0,
+            },
+            "coordinates": {
+                "inflammatory": inflamm_coords,
+                "lymphocyte": lymph_coords,
+                "monocyte": mono_coords
             }
         }
 
