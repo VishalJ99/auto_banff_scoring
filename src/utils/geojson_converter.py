@@ -3,7 +3,7 @@ import argparse
 import os
 
 # --- Constants ---
-MICRONS_PER_PIXEL = 0.242
+MICRONS_PER_PIXEL = 0.262719 #0.242
 MM_TO_MICRONS = 1000
 PIXELS_PER_MM = MM_TO_MICRONS / MICRONS_PER_PIXEL
 
