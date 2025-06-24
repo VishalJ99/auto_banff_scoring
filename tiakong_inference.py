@@ -33,8 +33,8 @@ from prediction.utils import binary_det_post_process
 
 MODEL_PATH = Path("/data2/ac2220/tiakong_model")
 TIAKONG_MODEL_NAME = "tiakong_model.pt"
-OUTPUT_PATH = Path("/data2/ac2220/real/ti2/output")
-LOG_PATH = Path(OUTPUT_PATH / "inference_log_klu323c.txt")
+OUTPUT_PATH = Path("/data2/ac2220/live_demo_output/macenko")
+LOG_PATH = Path(OUTPUT_PATH / "inference_log.txt")
 
 @dataclass
 class NormalizationStats:

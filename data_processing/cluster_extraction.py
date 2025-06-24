@@ -6,8 +6,8 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 
 # Parameters
-input_root = Path("/data2/ac2220/macenko_pipeline_output")  # 🔁 Update if needed
-output_csv = Path("data_handling/macenko_cluster_metrics_eps37.csv")
+input_root = Path("/data2/ac2220/demo_output")  # 🔁 Update if needed
+output_csv = Path("/data2/ac2220/demo_cluster_metrics_eps.csv")
 MICRONS_PER_PIXEL = 0.262719
 eps_microns = 37
 eps = eps_microns / MICRONS_PER_PIXEL  # ≈ 140.8 pixels
